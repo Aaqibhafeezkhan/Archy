@@ -15,6 +15,7 @@ from click.testing import CliRunner
 from archy.cli import main
 from archy.install.base import instructions_block
 from archy.install.registry import all_adapters
+from archy.install.runner import AdapterResult, InstallResult
 
 
 def _tree(*roots: Path) -> dict[Path, bytes | None]:
@@ -76,7 +77,8 @@ def test_the_preview_names_what_the_real_run_deletes_and_rewrites(
     preview = _run("uninstall", project, *options, "--dry-run").splitlines()
 
     assert _tree(home, project) == installed, "a dry run changed the disk"
-    # Sets: a file two clients share is listed once for each (#1041).
+    # A file two clients share is listed once, not once for each (#1041).
+    assert len(preview) == len(set(preview)), preview
     deleted = _listed(preview, "delete ")
     stripped = _listed(preview, "strip  ")
     assert all(line.startswith(("delete ", "strip  ")) for line in preview), preview
@@ -115,3 +117,49 @@ def test_a_dry_run_with_nothing_installed_says_so(simulate_os, tmp_path: Path):
 
     assert output == "Nothing to remove; archy is not installed for these targets.\n"
     assert not _tree(home)
+
+
+@pytest.mark.parametrize(("command", "verb"), [("install", "Wrote"), ("uninstall", "Cleaned up")])
+def test_the_real_run_lists_and_counts_a_shared_file_once(
+    command: str, verb: str, simulate_os, tmp_path: Path
+):
+    """Codex and OpenCode both use the project's `AGENTS.md`."""
+    simulate_os("linux")
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "AGENTS.md").write_text("# Mine\n", encoding="utf-8")
+    if command == "uninstall":
+        _run("install", project, "--target", "codex,opencode", "--location", "local", "--yes")
+
+    output = _run(command, project, "--target", "codex,opencode", "--location", "local", "--yes")
+
+    listed = [line.strip() for line in output.splitlines() if line.startswith("  ")]
+    assert listed.count(str(project / "AGENTS.md")) == 1, output
+    assert len(listed) == len(set(listed))
+    assert f"{verb} {len(listed)} file(s):" in output
+
+
+def test_all_paths_keeps_the_order_the_clients_ran_in():
+    shared, first, last = Path("z/AGENTS.md"), Path("z/b.json"), Path("a/c.json")
+    result = InstallResult(
+        results=(
+            AdapterResult(adapter_id="codex", written=(first, shared), notes=()),
+            AdapterResult(adapter_id="opencode", written=(shared, last), notes=()),
+        )
+    )
+
+    assert result.all_paths() == [first, shared, last]
+
+
+def test_a_shared_file_archy_created_is_previewed_for_deletion_once(simulate_os, tmp_path: Path):
+    """With no text of the user's own, the shared `AGENTS.md` is deleted, not stripped."""
+    simulate_os("linux")
+    project = tmp_path / "project"
+    project.mkdir()
+    options = ("--target", "codex,opencode", "--location", "local")
+    _run("install", project, *options, "--yes")
+
+    preview = _run("uninstall", project, *options, "--dry-run").splitlines()
+
+    assert preview.count(f"delete {project / 'AGENTS.md'}") == 1, preview
+    assert len(preview) == len(set(preview))

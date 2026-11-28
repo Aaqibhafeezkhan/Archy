@@ -25,6 +25,7 @@ from archy.scan_config import (
 if TYPE_CHECKING:
     # Type-only: archy.install is imported lazily inside `install` to keep startup cheap.
     from archy.install import ConfigPreview
+    from archy.install.writer import DryRunWriteSystem
 
 
 @main.command()
@@ -357,12 +358,7 @@ def uninstall(
                 seed_permissions=seed_permissions,
                 write_system=ws,
             )
-            for path in ws.removed:
-                click.echo(f"delete {path}")
-            for record in ws.records:
-                click.echo(f"strip  {record.path}")
-            if not ws.removed and not ws.records:
-                click.echo("Nothing to remove; archy is not installed for these targets.")
+            _echo_uninstall_preview(ws)
             return
 
         if not yes and not _confirm_targets(adapters, location, "be removed from"):
@@ -381,6 +377,16 @@ def uninstall(
     click.echo(f"Cleaned up {len(touched)} file(s):")
     for path in touched:
         click.echo(f"  {path}")
+
+
+def _echo_uninstall_preview(ws: DryRunWriteSystem) -> None:
+    """What `uninstall` would delete and strip, once per file (#1041)."""
+    for path in dict.fromkeys(ws.removed):
+        click.echo(f"delete {path}")
+    for path in dict.fromkeys(record.path for record in ws.records):
+        click.echo(f"strip  {path}")
+    if not ws.removed and not ws.records:
+        click.echo("Nothing to remove; archy is not installed for these targets.")
 
 
 def _confirm_targets(adapters, location: str, action: str) -> bool:

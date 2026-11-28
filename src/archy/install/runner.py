@@ -73,7 +73,13 @@ class InstallResult(BaseModel):
     results: tuple[AdapterResult, ...] = ()
 
     def all_paths(self) -> list[Path]:
-        return [p for r in self.results for p in r.written]
+        """Each file touched, once, in order.
+
+        Clients can share a file (Codex and OpenCode both use a project's
+        `AGENTS.md`), and every adapter's changes are rendered before any is
+        written, so each of them reports it (#1041).
+        """
+        return list(dict.fromkeys(p for r in self.results for p in r.written))
 
     def all_notes(self) -> list[str]:
         return [n for r in self.results for n in r.notes]
