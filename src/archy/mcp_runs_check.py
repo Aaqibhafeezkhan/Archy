@@ -25,6 +25,7 @@ from archy.conventions import (
     compute_conventions,
     compute_module_view,
 )
+from archy.conventions_models import REGISTRY_LITERAL_NAMES_SHOWN
 from archy.cycles import Cycle, CycleScan, scan_cycles
 from archy.diff import (
     DiffReport,
@@ -201,7 +202,7 @@ def _bound_conventions(report: ConventionsReport, top_n: int) -> BriefConvention
         surfaces=report.surfaces[:top_n],
         bases=report.bases[:top_n],
         registries=tuple(
-            r.model_copy(update={"literal_names": r.literal_names[:6]})
+            r.model_copy(update={"literal_names": r.literal_names[:REGISTRY_LITERAL_NAMES_SHOWN]})
             for r in report.registries[:top_n]
         ),
     )

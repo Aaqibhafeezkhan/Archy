@@ -245,6 +245,13 @@ class BaseFamily(BaseModel):
         )
 
 
+# How many of a registry's literal names the summaries show: CLI `conventions` and
+# `brief`, and MCP `archy_brief`. A project can declare dozens (mypy has 79 error
+# codes), and a few are enough to see the shape. `archy_conventions` returns them
+# all. Shared so the summaries cannot drift apart (#614).
+REGISTRY_LITERAL_NAMES_SHOWN = 6
+
+
 class RegistryEntry(BaseModel):
     """A constructor called repeatedly at module level to declare values.
 

@@ -12,6 +12,7 @@ from archy.conventions import (
     ConventionsReport,
     ModuleView,
 )
+from archy.conventions_models import REGISTRY_LITERAL_NAMES_SHOWN
 
 
 def _conventions_to_dict(report: ConventionsReport, *, top_n: int) -> dict:
@@ -27,7 +28,7 @@ def _conventions_to_dict(report: ConventionsReport, *, top_n: int) -> dict:
     payload["errors"] = [g.model_dump() for g in report.errors]
     payload["bases"] = [b.model_dump() for b in report.bases[:top_n]]
     payload["registries"] = [
-        {**r.model_dump(), "literal_names": list(r.literal_names[:6])}
+        {**r.model_dump(), "literal_names": list(r.literal_names[:REGISTRY_LITERAL_NAMES_SHOWN])}
         for r in report.registries[:top_n]
     ]
     # Export gaps are never truncated: the section exists to be complete, for
@@ -211,8 +212,9 @@ def _registry_lines(report: ConventionsReport, top_n: int) -> list[str]:
     for r in report.registries[:top_n]:
         lines.append(f"  {r.constructor:<28} {r.count:>3} @ {r.home_module} ({r.home_count})")
         if r.literal_names:
-            shown = ", ".join(r.literal_names[:6])
-            more = f" (+{len(r.literal_names) - 6})" if len(r.literal_names) > 6 else ""
+            shown = ", ".join(r.literal_names[:REGISTRY_LITERAL_NAMES_SHOWN])
+            hidden = len(r.literal_names) - REGISTRY_LITERAL_NAMES_SHOWN
+            more = f" (+{hidden})" if hidden > 0 else ""
             lines.append(f"  {'':<28}     names: {shown}{more}")
         for c in r.keyword_defaults[:3]:
             dist = ", ".join(f"{v}x{n}" for v, n in c.distribution)
