@@ -5,7 +5,7 @@ from pathlib import Path
 import networkx as nx
 import pytest
 
-from archy.cycles import find_cycles, scan_cycles
+from archy.cycles import Cycle, find_cycles, scan_cycles
 from archy.graph import build_graph
 from archy.mcp_runs import run_cycles
 
@@ -15,6 +15,20 @@ def _g(*edges: tuple[str, str, tuple[int, ...]]) -> nx.DiGraph:
     for u, v, lines in edges:
         g.add_edge(u, v, lines=lines)
     return g
+
+
+def _pairs(cycle: Cycle) -> set[tuple[str, str]]:
+    return {(e.source, e.target) for e in cycle.edges}
+
+
+def _lines_by_pair(cycle: Cycle) -> dict[tuple[str, str], tuple[int, ...]]:
+    return {(e.source, e.target): e.lines for e in cycle.edges}
+
+
+def _write_two_cycle(pkg: Path, first: str, second: str) -> None:
+    """Two modules of `pkg` that import each other."""
+    (pkg / f"{first}.py").write_text(f"from pkg.{second} import thing\n")
+    (pkg / f"{second}.py").write_text(f"from pkg.{first} import other\n")
 
 
 @pytest.fixture
@@ -35,7 +49,7 @@ def test_two_module_cycle():
     g = _g(("a", "b", (1,)), ("b", "a", (2,)))
     [cycle] = find_cycles(g)
     assert cycle.modules == ("a", "b")
-    assert {(e.source, e.target) for e in cycle.edges} == {("a", "b"), ("b", "a")}
+    assert _pairs(cycle) == {("a", "b"), ("b", "a")}
 
 
 def test_three_module_cycle():
@@ -80,7 +94,7 @@ def test_self_loop_reported_at_default_min_size():
     g.add_edge("a", "a", lines=(1,))
     [cycle] = find_cycles(g)
     assert cycle.modules == ("a",)
-    assert {(e.source, e.target) for e in cycle.edges} == {("a", "a")}
+    assert _pairs(cycle) == {("a", "a")}
     assert cycle.edges[0].lines == (1,)
 
 
@@ -101,16 +115,14 @@ def test_self_loop_alongside_multi_node_cycle():
 
 
 def test_edge_lines_preserved():
-    g = _g(("a", "b", (5, 9)), ("b", "a", (12,)))
+    g = _g(("a", "b", (1, 4, 9)), ("b", "a", (12,)))
     [cycle] = find_cycles(g)
-    by_pair = {(e.source, e.target): e.lines for e in cycle.edges}
-    assert by_pair[("a", "b")] == (5, 9)
-    assert by_pair[("b", "a")] == (12,)
+
+    assert _lines_by_pair(cycle) == {("a", "b"): (1, 4, 9), ("b", "a"): (12,)}
 
 
 def test_real_project_with_cycle(tmp_path: Path, pkg: Path):
-    (pkg / "a.py").write_text("from pkg.b import thing\n")
-    (pkg / "b.py").write_text("from pkg.a import other\n")
+    _write_two_cycle(pkg, "a", "b")
     g = build_graph(tmp_path)
     cycles = find_cycles(g)
     assert any(c.modules == ("pkg.a", "pkg.b") for c in cycles)
@@ -132,7 +144,7 @@ def test_cycle_excludes_attached_dag_branches():
     )
     [cycle] = find_cycles(g)
     assert cycle.modules == ("a", "b")
-    pairs = {(e.source, e.target) for e in cycle.edges}
+    pairs = _pairs(cycle)
     assert pairs == {("a", "b"), ("b", "a")}
     assert ("entry", "a") not in pairs
     assert ("a", "leaf") not in pairs
@@ -142,7 +154,7 @@ def test_cycle_includes_self_loop_on_member():
     g = _g(("a", "b", (1,)), ("b", "a", (2,)), ("a", "a", (5,)))
     [cycle] = find_cycles(g)
     assert cycle.modules == ("a", "b")
-    pairs = {(e.source, e.target) for e in cycle.edges}
+    pairs = _pairs(cycle)
     assert ("a", "a") in pairs
 
 
@@ -170,20 +182,9 @@ def test_min_size_does_not_gate_self_loops():
     assert cycles[0].modules == ("a",)
 
 
-def test_aggregated_lines_preserved_in_cycle_edges():
-    g: nx.DiGraph = nx.DiGraph()
-    g.add_edge("a", "b", lines=(1, 4, 9))
-    g.add_edge("b", "a", lines=(11,))
-    [cycle] = find_cycles(g)
-    by_pair = {(e.source, e.target): e.lines for e in cycle.edges}
-    assert by_pair[("a", "b")] == (1, 4, 9)
-
-
 def test_real_project_two_independent_cycles(tmp_path: Path, pkg: Path):
-    (pkg / "a.py").write_text("from pkg.b import thing\n")
-    (pkg / "b.py").write_text("from pkg.a import other\n")
-    (pkg / "x.py").write_text("from pkg.y import thing\n")
-    (pkg / "y.py").write_text("from pkg.x import other\n")
+    _write_two_cycle(pkg, "a", "b")
+    _write_two_cycle(pkg, "x", "y")
     g = build_graph(tmp_path)
     cycles = find_cycles(g)
     pair_modules = sorted(c.modules for c in cycles)
@@ -191,17 +192,11 @@ def test_real_project_two_independent_cycles(tmp_path: Path, pkg: Path):
 
 
 def test_real_project_reexport_mediated_cycle(tmp_path: Path, pkg: Path):
-    # Even with re-export resolution, a genuine cycle through __init__.py
-    # is still a cycle: pkg/__init__.py imports a name from pkg.a, pkg.a
-    # imports back from pkg (which after re-export resolution still resolves
-    # to a *different* source module - so a→b cycle should appear iff the
-    # re-export points at b).
+    # `__init__` re-exports only `Foo`, so `from pkg import Bar` cannot resolve
+    # through a re-export and falls back to `pkg`: a genuine pkg <-> pkg.a cycle.
     (pkg / "__init__.py").write_text("from .a import Foo\n")
     (pkg / "a.py").write_text("from pkg import Bar\nclass Foo: ...\n")
     (pkg / "b.py").write_text("class Bar: ...\n")
-    # Make Bar live in pkg.b via __init__.py re-export - but we already only
-    # have one re-export of Foo. So `from pkg import Bar` falls back to `pkg`.
-    # That manufactures the pkg → pkg.a → pkg cycle we expect to detect.
     g = build_graph(tmp_path)
     cycles = find_cycles(g)
     cycle_module_sets = [set(c.modules) for c in cycles]
