@@ -36,6 +36,9 @@ from tree_sitter import Language, Parser
 
 PY_LANGUAGE = Language(tsp.language())
 
+# Definitions that open a new naming scope.
+_SCOPE_NODE_TYPES = frozenset({"function_definition", "class_definition"})
+
 _BRANCH_NODE_TYPES = frozenset(
     {
         "if_statement",
@@ -80,15 +83,22 @@ class FunctionComplexity(BaseModel):
     size: int = 0
 
 
+def _parse(source: bytes):
+    return Parser(PY_LANGUAGE).parse(source)
+
+
+def _node_text(node, source: bytes) -> str:
+    """The source a node spans. Undecodable bytes are replaced, never raised."""
+    return source[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
+
+
 def compute_function_complexity(source: bytes) -> tuple[FunctionComplexity, ...]:
     """Extract per-function CC from the given Python source bytes.
 
     Returns functions in (line, qualified_name) order so callers can rely
     on stable iteration without re-sorting.
     """
-    parser = Parser(PY_LANGUAGE)
-    tree = parser.parse(source)
-    return walk_functions(tree.root_node, source)
+    return walk_functions(_parse(source).root_node, source)
 
 
 def walk_functions(root_node, source: bytes) -> tuple[FunctionComplexity, ...]:
@@ -133,7 +143,7 @@ def _walk_function_defs(node, source: bytes, visit, scope: tuple[str, ...] = ())
     stack = [(node, scope)]
     while stack:
         current, current_scope = stack.pop()
-        if current.type in ("function_definition", "class_definition"):
+        if current.type in _SCOPE_NODE_TYPES:
             name = _name_of(current, source)
             if current.type == "function_definition":
                 visit(current, current_scope)
@@ -203,7 +213,7 @@ def _walk_body_tokens(func_node) -> tuple[int, list[str]]:
     while stack:
         n = stack.pop()
         t = n.type
-        if t in ("function_definition", "class_definition"):
+        if t in _SCOPE_NODE_TYPES:
             # Nested definitions get their own row; their branches and shape
             # must not inflate the enclosing function.
             continue
@@ -228,7 +238,7 @@ def _name_of(node, source: bytes) -> str:
     name_node = node.child_by_field_name("name")
     if name_node is None:
         return "<anonymous>"
-    return source[name_node.start_byte : name_node.end_byte].decode("utf-8", errors="replace")
+    return _node_text(name_node, source)
 
 
 class FunctionFeatures(BaseModel):
@@ -262,9 +272,8 @@ _NONTRIVIAL_NODE_TYPES = frozenset(
         "try_statement",
         "await",
         "yield",
-        "function_definition",
-        "class_definition",
     }
+    | _SCOPE_NODE_TYPES
 )
 
 
@@ -275,8 +284,7 @@ def extract_function_features(source: bytes) -> dict[int, FunctionFeatures]:
     line), so a duplicate-cluster member can be looked up directly. Reuses the
     shared tree-sitter parser; no new dependency.
     """
-    parser = Parser(PY_LANGUAGE)
-    tree = parser.parse(source)
+    tree = _parse(source)
     out: dict[int, FunctionFeatures] = {}
 
     def visit(node, scope: tuple[str, ...]) -> None:
@@ -302,8 +310,7 @@ def extract_token_bags(source: bytes) -> dict[int, Counter[str]]:
     demand (a second parse, like `extract_function_features`); nothing is
     persisted, so the warm index cache is untouched.
     """
-    parser = Parser(PY_LANGUAGE)
-    tree = parser.parse(source)
+    tree = _parse(source)
     out: dict[int, Counter[str]] = {}
 
     def visit(node, scope: tuple[str, ...]) -> None:
@@ -333,7 +340,7 @@ def _concrete_hash(func_node, source: bytes) -> str:
         if n.type == "comment":
             continue
         if n.child_count == 0:
-            tokens.append(source[n.start_byte : n.end_byte].decode("utf-8", errors="replace"))
+            tokens.append(_node_text(n, source))
         else:
             tokens.append(n.type)
         stack.extend(reversed(n.children))
@@ -363,7 +370,7 @@ def _decorator_names(func_node, source: bytes) -> tuple[str, ...]:
             fn = expr.child_by_field_name("function")
             if fn is not None:
                 expr = fn
-        names.append(source[expr.start_byte : expr.end_byte].decode("utf-8", errors="replace"))
+        names.append(_node_text(expr, source))
     return tuple(names)
 
 
